@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+.pioenvs/
+.piolibdeps/
+include/config.h
+*.bin
+*.elf
