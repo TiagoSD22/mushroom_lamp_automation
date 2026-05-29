@@ -47,16 +47,37 @@ else
     echo "        Install from https://code.visualstudio.com/ and enable 'Shell Command: Install code in PATH'."
 fi
 
-# 4. Linux-only: dialout group check for serial access
+# 4. Linux-only: dialout group + udev rules check for serial access
 if [[ "$(uname -s)" == "Linux" ]]; then
     echo
-    echo "[serial] Checking '$USER' is in the dialout group (needed for /dev/ttyUSB*)..."
+    echo "[serial] Checking PlatformIO udev rules..."
+    if [[ -f /etc/udev/rules.d/99-platformio-udev.rules ]]; then
+        echo "         OK"
+    else
+        echo "         MISSING. Install with:"
+        echo "           curl -fsSL https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/system/99-platformio-udev.rules | sudo tee /etc/udev/rules.d/99-platformio-udev.rules"
+        echo "           sudo udevadm control --reload-rules"
+        echo "           sudo udevadm trigger"
+    fi
+
+    echo
+    echo "[serial] Checking '$USER' is in the dialout group (needed for /dev/tty{USB,ACM}*)..."
     if id -nG "$USER" | grep -qw dialout; then
         echo "         OK"
     else
         echo "         WARNING: user '$USER' is NOT in the dialout group."
         echo "         Fix with:  sudo usermod -aG dialout \$USER"
-        echo "         Then log out and back in for the change to take effect."
+        echo "         On bare Linux: log out and back in afterwards."
+        echo "         On WSL:        run 'wsl --shutdown' from Windows PowerShell (just reopening the terminal is NOT enough)."
+    fi
+
+    # Detect WSL
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        echo
+        echo "[wsl] Detected WSL2. USB devices must be bridged from Windows via usbipd-win:"
+        echo "     1) Windows PowerShell (admin, one-time):   usbipd bind --busid <BUSID>"
+        echo "     2) Windows PowerShell (per session):       usbipd attach --wsl --busid <BUSID>"
+        echo "     See README section 3.3 for the full walkthrough."
     fi
 fi
 
