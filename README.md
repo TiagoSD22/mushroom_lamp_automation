@@ -55,16 +55,26 @@ mushroom_light_automation/
 | **C/C++** (Microsoft, VS Code extension) | IntelliSense, code navigation | Usually auto-installed with PlatformIO |
 | **USB-UART driver** | Lets the OS see the ESP32's USB-to-serial chip | See §3.2 |
 
-### 3.2 USB-UART driver
+### 3.2 USB-UART driver and serial access
 
 Most ESP32 dev boards expose their UART through a USB-to-serial chip. Identify yours from the markings on the board:
 
 - **CP2102 / CP2104** (Silicon Labs) — common on NodeMCU-32S, ESP32 DevKit-V1.
-- **CH340 / CH341** (WCH) — common on cheap clones.
+- **CH340 / CH341 / CH9102** (WCH) — common on cheap clones.
 
-**Linux:** both drivers ship in the mainline kernel; no install needed. After plugging in, the ESP32 appears as `/dev/ttyUSB0` (CH340) or `/dev/ttyUSB0` / `/dev/ttyACM0` (CP210x). Confirm with `ls /dev/tty{USB,ACM}*` or `dmesg | tail`.
+**Linux:** drivers ship in the mainline kernel; no install needed. After plugging in, the ESP32 appears as `/dev/ttyUSB0` (CH340), `/dev/ttyACM0` (CP210x or CH9102 on recent kernels). Confirm with `ls /dev/tty{USB,ACM}*` or `sudo dmesg | tail`.
 
-To access the serial port without `sudo`, add your user to the `dialout` group (Debian/Ubuntu) or `uucp` group (Arch), then log out and back in:
+Two more one-time steps are needed on Linux before PlatformIO can open the port:
+
+**1) Install PlatformIO's udev rules** (without these, the port shows up but PlatformIO can't open it):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/system/99-platformio-udev.rules | sudo tee /etc/udev/rules.d/99-platformio-udev.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+**2) Add yourself to the serial group** (`dialout` on Debian/Ubuntu, `uucp` on Arch):
 
 ```bash
 sudo usermod -aG dialout $USER     # Debian/Ubuntu
@@ -72,14 +82,70 @@ sudo usermod -aG dialout $USER     # Debian/Ubuntu
 sudo usermod -aG uucp $USER        # Arch
 ```
 
+You need a fresh shell session for the group change to take effect. **On WSL, closing the terminal isn't enough — see §3.3.**
+
 **macOS:** drivers are *not* bundled. Install the right one:
 
 - CP210x: https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers (universal binary)
-- CH340: https://github.com/WCHSoftGroup/ch34xser_macos
+- CH340/CH9102: https://github.com/WCHSoftGroup/ch34xser_macos
 
-After install, the ESP32 appears as `/dev/cu.SLAB_USBtoUART` (CP210x) or `/dev/cu.usbserial-XXXX` (CH340). PlatformIO auto-detects it.
+After install, the ESP32 appears as `/dev/cu.SLAB_USBtoUART` (CP210x) or `/dev/cu.usbserial-XXXX` (CH340/CH9102). PlatformIO auto-detects it.
 
-### 3.3 Sinric Pro account
+### 3.3 WSL2 — bridging USB from Windows (skip if not on WSL)
+
+WSL2 doesn't expose USB devices to Linux by default; Windows owns the USB stack. Use [**usbipd-win**](https://github.com/dorssel/usbipd-win) to bridge the ESP32 into WSL.
+
+#### One-time setup
+
+1. **Install usbipd-win** on the Windows side. From Windows PowerShell:
+
+   ```powershell
+   winget install --source winget --interactive --exact dorssel.usbipd-win
+   ```
+
+   If winget fails with a Microsoft Store source / certificate error, download the MSI directly from https://github.com/dorssel/usbipd-win/releases/latest and double-click it. Close and reopen PowerShell after install so `usbipd` is on PATH.
+
+2. **Identify the ESP32.** In any Windows PowerShell:
+
+   ```powershell
+   usbipd list
+   ```
+
+   Look for the serial device whose VID:PID matches your chip — CP2102 (`10c4:ea60`), CH340 (`1a86:7523`), or CH9102 (`1a86:55d4`). Note its **BUSID** (e.g., `3-3`).
+
+3. **Bind it** (persistent across reboots). In **Windows PowerShell as Administrator**:
+
+   ```powershell
+   usbipd bind --busid 3-3
+   ```
+
+   `STATE` should change from `Not shared` to `Shared`.
+
+#### Per-session steps
+
+Each time you boot Windows or run `wsl --shutdown`, re-attach the device. From Windows PowerShell (no admin needed):
+
+```powershell
+usbipd attach --wsl --busid 3-3
+```
+
+Then in WSL:
+
+```bash
+ls /dev/tty{USB,ACM}* 2>/dev/null
+```
+
+#### Applying `dialout` membership on WSL
+
+`sudo usermod -aG dialout $USER` doesn't take effect by reopening the terminal alone — WSL keeps the old credentials in its init process. Restart the whole WSL VM from Windows PowerShell:
+
+```powershell
+wsl --shutdown
+```
+
+Then re-run `usbipd attach --wsl --busid 3-3` and open a fresh WSL terminal. `groups | grep dialout` should now list `dialout`.
+
+### 3.4 Sinric Pro account
 
 1. Sign up at https://sinric.pro/.
 2. From the dashboard, create a new **Light** device.
@@ -196,6 +262,8 @@ Work through these in order on the bench:
 
 ## 8. Troubleshooting
 
+### 8.1 Hardware / firmware
+
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Lamp twitches on ESP32 boot | GPIO not driven LOW before output enable | Already handled in `initGpios()` — check the GPIO pins aren't swapped with strapping pins (avoid GPIO 0, 2, 5, 12, 15) |
@@ -205,6 +273,17 @@ Work through these in order on the bench:
 | Sinric device shows offline | App key/secret/device ID mismatch | Re-copy from the Sinric Pro dashboard into `include/config.h` |
 | Alexa says "device isn't responding" | Sinric device not yet discovered | In Alexa app: *Devices → + → Add Device → Other → Discover devices* |
 | Powerbank shuts off | ESP32 in deep sleep below powerbank threshold | This firmware keeps Wi-Fi continuously connected (~80 mA), well above any auto-shutoff threshold |
+
+### 8.2 Toolchain / OS
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `winget install … usbipd-win` fails with `msstore` certificate error (`0x8a15005e`) | Microsoft Store source has a TLS issue on this machine | Re-run with `--source winget`, or download the MSI directly from https://github.com/dorssel/usbipd-win/releases/latest |
+| `usbipd: command not recognized` right after install | PowerShell session was started before install, PATH not refreshed | Close and reopen PowerShell, or refresh PATH in-session: `$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")` |
+| `usbipd attach` succeeds but `/dev/ttyUSB*` and `/dev/ttyACM*` don't appear in WSL | WSL kernel didn't enumerate the device, or stale dmesg | Run `sudo dmesg | tail -30`; if nothing serial-related, run `wsl --shutdown` then re-attach |
+| `Could not open /dev/ttyACM0 … [Errno 13] Permission denied` during `pio run -t upload` | Missing PlatformIO udev rules and/or user not in `dialout` group | Install udev rules (see §3.2 step 1), `sudo usermod -aG dialout $USER`, then `wsl --shutdown` on WSL or log out/in on bare Linux; re-attach USB and retry |
+| `Warning! Please install 99-platformio-udev.rules` printed during build | PlatformIO udev rules absent | Run the curl + udevadm commands from §3.2 step 1 |
+| Port disappears from WSL after `wsl --shutdown` | Expected — shutdown detaches all USB devices | Re-run `usbipd attach --wsl --busid <id>` from Windows PowerShell after WSL is back up |
 
 ---
 
