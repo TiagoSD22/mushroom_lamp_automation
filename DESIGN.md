@@ -29,6 +29,7 @@ Typical usage window: **6 PM – 11 PM**, ambient/accent lighting.
 | BC547 NPN BJT × 2 | Vce ~45 V, Ic max 100 mA | Button bridge transistors |
 | 1 kΩ resistors × 2 | — | Base current limiting |
 | 300 Ω resistors | — | Spares (not used in final design) |
+| **USB Y-splitter / hub** | 1× USB-A male to 2× USB-A female (power only is fine) | Splits a single powerbank port to feed ESP32 + lamp together — see §5.4 |
 | Wires | — | Interconnect |
 
 ## 4. System Architecture
@@ -36,6 +37,16 @@ Typical usage window: **6 PM – 11 PM**, ambient/accent lighting.
 ```
                 ┌────────────────────────────────┐
                 │   Powerbank 5 V USB output     │
+                │   (single port; see §5.4)      │
+                └────────────────┬───────────────┘
+                                 │ 5 V
+                                 ▼
+                ┌────────────────────────────────┐
+                │     USB Y-splitter / hub       │
+                │  (combines load so total       │
+                │   draw stays above the         │
+                │   powerbank's auto-shutoff     │
+                │   threshold)                   │
                 └──────┬──────────────────┬──────┘
                        │ 5 V              │ 5 V
                        ▼                  ▼
@@ -86,7 +97,7 @@ Originally proposed to save energy when the lamp is off. Rejected because:
 Each BC547 sits across one of the lamp's existing buttons. When the ESP32 GPIO goes HIGH, the transistor saturates and shorts the button pads — electrically equivalent to a finger press.
 
 - Base drive: `Ib = (3.3 V − 0.7 V) / 1 kΩ ≈ 2.6 mA` → deep saturation for the microamp-scale button signal.
-- Pulse width: 80 ms HIGH, then 120 ms gap before the next press.
+- Pulse width: 250 ms HIGH, then 200 ms gap before the next press. *(80 ms was tried first but was below the lamp MCU's debounce threshold; 250 ms registers reliably on this specific lamp. Tune `PRESS_HOLD_MS` in `main.cpp` if a different lamp model needs longer or shorter.)*
 
 ### 5.3 GPIO selection
 Use **GPIO 25 (power)** and **GPIO 26 (color)**. Both are regular outputs, not strapping pins. Both must be initialized LOW in `setup()` *before* enabling the pin as OUTPUT to prevent a spurious press during ESP32 boot.
@@ -104,6 +115,22 @@ ESP32 receives a color-temp event from Sinric, computes the shortest **forward**
 
 ### 5.5 State persistence
 Persist `lamp_on` (bool) and `color_index` (0–2) in ESP32 NVS via the `Preferences` library. Since lamp power is never cut, NVS state and physical lamp state stay in sync across reboots. First-time seed: assume index 0 (white) only if NVS is empty.
+
+### 5.6 Power distribution — single port via USB Y-splitter
+**Both the ESP32 and the lamp must share the SAME powerbank USB port via a Y-splitter, not two separate ports.**
+
+Reason: powerbanks watch each output port's current draw independently and shut the port off when the load falls below a threshold (typically 50–100 mA, sustained for 30–60 seconds). The original design assumed the ESP32's continuous Wi-Fi draw (~80 mA) would carry the whole system, but in reality:
+
+- ESP32 on its own port → ~80 mA → stays alive ✓
+- Lamp on its own port (standby) → ~5–10 mA → **port shuts off** after ~1 minute, lamp becomes unreachable until the powerbank is physically prodded back to life
+
+By combining both devices on one port through a Y-splitter, the **summed** draw never drops below ~90 mA, so the port stays awake even when the lamp is "off" most of the day.
+
+Side benefits:
+- Common GND is guaranteed by the splitter's shared shell — no chance of a missing ground jumper between ESP32 and lamp.
+- Only one cable to the powerbank → cleaner mechanically.
+
+Caveat: cheap Y-splitters sometimes have thin internal wire (24 AWG or worse). For continuous ~150 mA draw (lamp on + ESP32) this is fine, but avoid anything that feels suspiciously light.
 
 ## 6. Schematic
 
@@ -250,22 +277,26 @@ onColorTemperature(int kelvin) ─►
 
 ## 8. Energy Budget
 
+Both devices feed off a single powerbank port via the Y-splitter (see §5.6).
+
 | Source | Current @ 5V | Daily energy (mAh) |
 |---|---|---|
-| ESP32 (Wi-Fi idle) | ~80 mA | ~1920 mAh |
+| ESP32 (Wi-Fi idle, continuous) | ~80 mA | ~1920 mAh |
 | Lamp standby (off) | ~10 mA | ~190 mAh (19 hrs off) |
-| Lamp active (on)   | ~150 mA | ~750 mAh (5 hrs on) |
-| **Total / day**    |  | **~2860 mAh** |
+| Lamp active (on) | ~150 mA | ~750 mAh (5 hrs on) |
+| **Total / day** |  | **~2860 mAh** |
 
 Powerbank capacity: 60,000 mAh @ 3.7 V cell → ~44,400 mAh @ 5 V (after boost losses ~85%).
 **Estimated autonomy: ~15 days per full charge.**
+
+**Combined draw on the active USB port** stays between ~90 mA (lamp off + ESP32 idle) and ~230 mA (lamp on + ESP32 idle), comfortably above the typical 50–100 mA auto-shutoff threshold.
 
 ## 9. Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
 | Spurious button press during ESP32 boot | Initialize GPIO LOW *before* setting as OUTPUT; verify with scope on first power-up |
-| Powerbank auto-shutoff on low load | ESP32's continuous Wi-Fi draw (~80 mA) is comfortably above any modern powerbank's threshold |
+| Powerbank auto-shutoff on low load | **Combine ESP32 + lamp on one USB port via a Y-splitter** (§5.6). Each port has its own threshold — the lamp's standby draw alone (~10 mA) will let its port shut off within a minute. Sharing the port with the ESP32 keeps total draw ≥ 90 mA always. |
 | Wi-Fi disconnect → loss of voice control | Sinric Pro library handles reconnect; state survives in NVS |
 | Lamp's MCU latch-up via button pad | Mitigated by NOT cutting lamp power (always-on shared rail) |
 | Wrong button pad identified as GND | Use multimeter continuity to lamp GND before soldering; transistor in reverse mode would fail to bridge cleanly — easy to detect during bring-up |
