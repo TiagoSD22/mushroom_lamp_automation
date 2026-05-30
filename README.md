@@ -208,8 +208,10 @@ Refer to [DESIGN.md §6 (Schematic)](DESIGN.md) for the full diagram. Quick refe
 |---|---|---|---|---|
 | GPIO 25 | → | 1 kΩ | → | Base of Q1 (BC547), C/E across **power button** pads |
 | GPIO 26 | → | 1 kΩ | → | Base of Q2 (BC547), C/E across **color button** pads |
-| GND | → | — | → | Lamp GND (shared via powerbank) |
-| 5V / VIN | → | — | → | Powerbank USB 5V |
+| GND | → | — | → | Lamp GND (shared via USB Y-splitter) |
+| 5V / VIN | → | — | → | Powerbank USB 5V (via Y-splitter — see below) |
+
+**Power delivery — important:** plug both the ESP32 and the lamp into the **same** powerbank port using a USB Y-splitter, not two separate ports. Powerbanks auto-shut off each port when its load drops below ~50–100 mA, and the lamp's standby draw alone is too low to keep its port awake. Sharing the port keeps total draw above the threshold whether the lamp is on or off. See [DESIGN.md §5.6](DESIGN.md) for the full rationale.
 
 **Before soldering:** identify which side of each lamp button is GND (multimeter continuity to lamp USB shield) and which is signal — connect emitter to GND side, collector to signal side.
 
@@ -272,7 +274,9 @@ Work through these in order on the bench:
 | Wi-Fi won't connect | SSID/password typo, or 5 GHz-only network | ESP32 (classic) is 2.4 GHz only — check router band |
 | Sinric device shows offline | App key/secret/device ID mismatch | Re-copy from the Sinric Pro dashboard into `include/config.h` |
 | Alexa says "device isn't responding" | Sinric device not yet discovered | In Alexa app: *Devices → + → Add Device → Other → Discover devices* |
-| Powerbank shuts off | ESP32 in deep sleep below powerbank threshold | This firmware keeps Wi-Fi continuously connected (~80 mA), well above any auto-shutoff threshold |
+| Lamp becomes unresponsive after sitting idle (off) for a while, until you replug or press the powerbank's button | Powerbank shut off the lamp's USB port because standby draw was below its threshold | **Plug ESP32 + lamp into the SAME powerbank port via a USB Y-splitter.** The combined draw (~90 mA min) keeps the port active. Each port has its own threshold — running them on separate ports doesn't help, even though the ESP32 alone would keep its own port awake. |
+| Whole rig dies (ESP32 too) after long idle | Some powerbanks shut down all outputs when total draw is low | Same fix as above (Y-splitter) — combined draw is what triggers per-port AND overall keep-alive logic |
+| Lamp doesn't react to press despite ESP32 firing GPIO | Press too short for lamp MCU's debounce | Increase `PRESS_HOLD_MS` in `src/main.cpp` (the default is 250 ms; some lamps need 300–400 ms) |
 
 ### 8.2 Toolchain / OS
 
