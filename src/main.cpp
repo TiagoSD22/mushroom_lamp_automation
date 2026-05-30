@@ -11,7 +11,7 @@ constexpr int PIN_POWER_BTN = 25;
 constexpr int PIN_COLOR_BTN = 26;
 
 // ---------- Timing ----------
-constexpr uint16_t PRESS_HOLD_MS = 80;
+constexpr uint16_t PRESS_HOLD_MS = 250;
 constexpr uint16_t PRESS_GAP_MS  = 200;
 constexpr uint16_t LAMP_BOOT_MS  = 600;
 constexpr uint32_t WIFI_TIMEOUT_MS = 30000;
